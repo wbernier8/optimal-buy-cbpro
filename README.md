@@ -2,16 +2,16 @@
 
 [![Build Status](https://travis-ci.org/brndnmtthws/optimal-buy-cbpro.svg?branch=master)](https://travis-ci.org/brndnmtthws/optimal-buy-cbpro) [![Maintainability](https://api.codeclimate.com/v1/badges/541bae75a95dad098787/maintainability)](https://codeclimate.com/github/brndnmtthws/optimal-buy-cbpro/maintainability) [![Test Coverage](https://api.codeclimate.com/v1/badges/541bae75a95dad098787/test_coverage)](https://codeclimate.com/github/brndnmtthws/optimal-buy-cbpro/test_coverage) [![PyPI version](https://badge.fury.io/py/optimal-buy-cbpro.svg)](https://badge.fury.io/py/optimal-buy-cbpro)
 
-Scheduled buying of BTC, ETH, and LTC from Coinbase Pro (formerly GDAX) optimally!
+Scheduled buying of BTC, ETH, LTC, and etc. from Coinbase Pro optimally!
 
 ![crypto](crypto.gif)
 
 # What is this?
 
 This is a Python script you can use to automatically buy Bitcoin, Ethereum,
-Litecoin, and more using the Coinbase Pro API. By default, it buys these 3 currencies,
-weighted by market cap (as reported by
-[coinmarketcap.com](https://coinmarketcap.com/)), using a form of [dollar cost
+Litecoin, and more using ccxt (CryptoCurrency eXchange Trading), which supports 
+Coinbase Pro. By default, it buys these 3 currencies, weighted by market 
+cap (as reported by [coincap.io](https://coincap.io/)), using a form of [dollar cost
 averaging](https://www.bogleheads.org/wiki/Dollar_cost_averaging) according to
 the following logic (assuming default values):
 
@@ -29,16 +29,18 @@ the following logic (assuming default values):
    coins to desired addresses
 
 In effect, this script mimmicks the behaviour of a market cap weighted index
-fund, but without the fees. It also only supports the coins that trade on Coinbase Pro
-(because that's the only exchange that has an API for ACH deposits AFAIK).
+fund, but without the fees. It fully supports the coins that trade on Coinbase Pro
+(because that's the only exchange that has an API for ACH deposits AFAIK). It has 
+partial support for Gemini and other exchanges. 
 
 You can also use the same script to schedule deposits from your bank account
 periodically, such as when you're paid. The parameters may be configured to suit
 your preferences, such as which coins to buy, external balances, discount
-values, number of steps, etc.
+values, number of steps, etc. For exchanges that do not support deposits, an
+email will be sent to remind the user to make a deposit.
 
 Orders, deposits, and withdrawals are tracked in a SQLite DB, and the withdrawn
-balances are added to the balances on Coinbase Pro to make sure the weights are
+balances are added to the balances on the exchange to make sure the weights are
 maintained over time. The SQLite DB can be swapped out for any DB that
 SQLAlchemy supports.
 
