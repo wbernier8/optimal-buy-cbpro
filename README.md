@@ -1,4 +1,4 @@
-# optimal-buy-cbpro (formerly optimal-buy-gdax)
+# optimal-buy-ccxt (forked from optimal-buy-cbpro)
 
 [![Build Status](https://travis-ci.org/brndnmtthws/optimal-buy-cbpro.svg?branch=master)](https://travis-ci.org/brndnmtthws/optimal-buy-cbpro) [![Maintainability](https://api.codeclimate.com/v1/badges/541bae75a95dad098787/maintainability)](https://codeclimate.com/github/brndnmtthws/optimal-buy-cbpro/maintainability) [![Test Coverage](https://api.codeclimate.com/v1/badges/541bae75a95dad098787/test_coverage)](https://codeclimate.com/github/brndnmtthws/optimal-buy-cbpro/test_coverage) [![PyPI version](https://badge.fury.io/py/optimal-buy-cbpro.svg)](https://badge.fury.io/py/optimal-buy-cbpro)
 
