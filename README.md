@@ -4,8 +4,6 @@
 
 Scheduled buying of BTC, ETH, LTC, and etc. from Coinbase Pro optimally!
 
-![crypto](crypto.gif)
-
 # What is this?
 
 This is a Python script you can use to automatically buy Bitcoin, Ethereum,
