@@ -8,7 +8,8 @@ import time
 import dateutil.parser
 import json
 import requests
-from .history import Order, Deposit, Withdrawal, get_session
+from datetime import datetime
+from history import Order, Deposit, Withdrawal, get_session
 from requests.exceptions import HTTPError
 
 
@@ -35,13 +36,13 @@ def get_weights(coins, fiat_currency):
     print('coin weights:')
     for w in weights:
         print('  {0}: {1:.4f}'.format(w, weights[w]))
-    print()
+    print("\n")
     return weights
 
 
-def deposit(args, ccxt_client, db_session):
-    if not ccxt_client.has['deposit']:
-        print('deposit not supported by ccxt for:',ccxt_client.name)
+def deposit(args, gemini_client, db_session):
+    if not gemini_client.has['deposit']:
+        print('deposit not supported by ccxt for:', gemini_client.name)
         sys.exit(1)
     if args.amount is None:
         print('please specify deposit amount with `--amount`')
@@ -51,10 +52,10 @@ def deposit(args, ccxt_client, db_session):
         sys.exit(1)
     print('performing deposit, amount={} {}'.format(args.amount,
                                                     args.fiat_currency))
-    #working on updaing the line below for ccxt
-    deposit = ccxt_client.deposit(payment_method_id=args.payment_method_id,
-                                   amount=args.amount,
-                                   currency=args.fiat_currency)
+    # working on updating the line below for ccxt
+    deposit = gemini_client.deposit(payment_method_id=args.payment_method_id,
+                                    amount=args.amount,
+                                    currency=args.fiat_currency)
     print('deposit={}'.format(deposit))
     if 'id' in deposit:
         db_session.add(
@@ -69,28 +70,27 @@ def deposit(args, ccxt_client, db_session):
         db_session.commit()
 
 
-def get_products(ccxt_client, coins, fiat_currency):
-    products = ccxt_client.fetchMarkets()
+def get_products(gemini_client, coins, fiat_currency):
+    products = gemini_client.loadMarkets()
     for p in products:
-        pp = p['info'] #making another variable (pp) for the subdict 'info'
-        if pp['base_currency'] in coins \
-                and pp['quote_currency'] == fiat_currency:
-            coins[pp['base_currency']]['minimum_order_size'] = \
-                float(pp['base_min_size'])
+        if products[p]['base'] in coins and products[p]['quote'] == fiat_currency:
+            coins[products[p]['base']]['minimum_order_size'] = \
+                float(products[p]['limits']['amount']['min'])
+            coins[products[p]['base']]['precision'] = products[p]['precision']
     return products
 
 
-def get_prices(ccxt_client, coins, fiat_currency):
+def get_prices(gemini_client, coins, fiat_currency):
     prices = {}
     for c in coins:
-        ticker = ccxt_client.get_product_ticker(
-            product_id='{}-{}'.format(c, fiat_currency))
-        if 'price' not in ticker:
-            raise(
+        ticker = gemini_client.fetchTicker(
+            symbol='{}/{}'.format(c, fiat_currency))
+        if 'last' not in ticker:
+            raise (
                 Exception('no price available for {} ticker={}'.format(
                     c, ticker)))
         print('{} ticker={}'.format(c, ticker))
-        prices[c] = float(ticker['price'])
+        prices[c] = float(ticker['last'])
     return prices
 
 
@@ -102,18 +102,14 @@ def get_external_balance(coins, coin):
     return external_balance
 
 
-def get_fiat_balances(args, coins, accounts, withdrawn_balances, prices):
-    balances = {}
-    for a in accounts:
-        if a['currency'] == args.fiat_currency:
-            balances[args.fiat_currency] = float(a['balance'])
-        elif a['currency'] in coins:
-            balance = float(a['balance']) + get_external_balance(coins,
-                                                                 a['currency'])
-            if a['currency'] in withdrawn_balances:
-                balance = balance + withdrawn_balances[a['currency']]
-            balances[a['currency']] = \
-                balance * prices[a['currency']]
+def get_fiat_balances(coins, accounts, withdrawn_balances, prices):
+    balances = dict(accounts['total'])
+    for b in balances:
+        if b in coins:
+            balance = float(balances[b]) + get_external_balance(coins, b)
+            if b in withdrawn_balances:
+                balance = balance + withdrawn_balances[b]
+            balances[b] = balance * prices[b]
     for c in coins:
         if c not in balances:
             balances[c] = 0
@@ -126,25 +122,30 @@ def get_account(accounts, currency):
             return a
 
 
-def set_buy_order(args, coin, price, size, ccxt_client, db_session):
+def set_buy_order(args, coin, price, amount, gemini_client, db_session):
     print('placing order coin={0} price={1:.2f} size={2:.8f}'.format(
-        coin, price, size))
-    order = ccxt_client.buy(
-        price='{0:.2f}'.format(price),
-        size='{0:.8f}'.format(size),
-        order_type='limit',
-        product_id='{}-{}'.format(coin, args.fiat_currency),
-        post_only='true',
-    )
+        coin, price, amount))
+
+    symbol = '{}/{}'.format(coin, args.fiat_currency)
+
+    # type = 'limit'  # or 'market'
+    # side = 'buy'  # or 'buy'
+    # extra params and overrides if needed
+    params = {
+        #     'test': True,  # test if it's valid, but don't actually place it
+    }
+
+    order = gemini_client.create_order(symbol, 'limit', 'buy', amount, price, params)
+
     print('order={}'.format(order))
     if 'id' in order:
         db_session.add(
             Order(
                 currency=coin,
-                size=size,
+                size=amount,
                 price=price,
                 cbpro_order_id=order['id'],
-                created_at=dateutil.parser.parse(order['created_at'])
+                created_at=datetime.fromtimestamp(int(order['info']['timestamp']))
             )
         )
         db_session.commit()
@@ -174,7 +175,7 @@ def generate_buy_orders(coins, coin, args, amount_to_buy, price):
     for _ in range(0, number_of_orders):
         discounted_price = Decimal(math.floor(
             100.0 * price * discount)) / Decimal(100)
-        size = amount / discounted_price
+        size = round(amount / discounted_price, coins[coin]['precision']['amount'])
 
         buy_orders.append({
             'price': float(discounted_price),
@@ -185,7 +186,7 @@ def generate_buy_orders(coins, coin, args, amount_to_buy, price):
 
 
 def place_buy_orders(args, amount_to_buy, coins, coin, price,
-                     ccxt_client, db_session):
+                     gemini_client, db_session):
     if amount_to_buy <= 0.01:
         print('{}: balance_difference_fiat={}, not buying {}'.format(
             coin, amount_to_buy, coin))
@@ -199,11 +200,10 @@ def place_buy_orders(args, amount_to_buy, coins, coin, price,
     for order in buy_orders:
         set_buy_order(args, coin,
                       order['price'], order['size'],
-                      ccxt_client, db_session)
+                      gemini_client, db_session)
 
 
-def start_buy_orders(args, coins, accounts, prices, fiat_balances,
-                     fiat_amount, ccxt_client, db_session):
+def start_buy_orders(args, coins, prices, fiat_balances, fiat_amount, gemini_client, db_session):
     weights = get_weights(coins, args.fiat_currency)
 
     # Determine amount of each coin, in fiat, to buy
@@ -235,10 +235,10 @@ def start_buy_orders(args, coins, accounts, prices, fiat_balances,
 
     for c in coins:
         place_buy_orders(args, amount_to_buy[c], coins, c, prices[c],
-                         ccxt_client, db_session)
+                         gemini_client, db_session)
 
 
-def execute_withdrawal(ccxt_client, amount, currency, crypto_address,
+def execute_withdrawal(gemini_client, amount, currency, crypto_address,
                        db_session):
     # The cbpro API does something goofy where the account balance
     # has more decimal places than the withdrawal API supports, so
@@ -247,7 +247,7 @@ def execute_withdrawal(ccxt_client, amount, currency, crypto_address,
     # janky flooring.
     amount = '{0:.9f}'.format(float(amount))[0:-1]
     print('withdrawing {} {} to {}'.format(amount, currency, crypto_address))
-    transaction = ccxt_client.crypto_withdraw(
+    transaction = gemini_client.crypto_withdraw(
         amount=amount,
         currency=currency,
         crypto_address=crypto_address
@@ -265,7 +265,7 @@ def execute_withdrawal(ccxt_client, amount, currency, crypto_address,
         db_session.commit()
 
 
-def withdraw(coins, accounts, ccxt_client, db_session):
+def withdraw(coins, accounts, gemini_client, db_session):
     for coin in coins:
         if 'withdrawal_address' not in coins[coin] or \
                 coins[coin]['withdrawal_address'] is None or \
@@ -278,7 +278,7 @@ def withdraw(coins, accounts, ccxt_client, db_session):
             print('{} balance only {}, not withdrawing'.format(
                 coin, account['balance']))
         else:
-            execute_withdrawal(ccxt_client,
+            execute_withdrawal(gemini_client,
                                account['balance'],
                                coin,
                                coins[coin]['withdrawal_address'],
@@ -296,23 +296,31 @@ def get_withdrawn_balances(db_session):
     return withdrawn_balances
 
 
-def buy(args, coins, ccxt_client, db_session):
+def cancel_all_orders(gemini_client, coins, fiat_currency):
+    orders = gemini_client.fetchOpenOrders()
+    for c in coins:
+        for order in orders:
+            if order['symbol'] == str(c + '/' + fiat_currency):
+                gemini_client.cancelOrder(order['id'])
+                print('cancelling order id:', order['id'])
+
+
+def buy(args, coins, gemini_client, db_session):
     print('starting buy and (maybe) withdrawal')
     print('first, cancelling orders')
-    products = get_products(ccxt_client, coins, args.fiat_currency)
+    products = get_products(gemini_client, coins, args.fiat_currency)
     print('products={}'.format(products))
-    for c in coins:
-        ccxt_client.cancel_all(
-            product_id='{}-{}'.format(c, args.fiat_currency))
+    # moving canceling all orders to its own function
+    cancel_all_orders(gemini_client, coins, args.fiat_currency)
     # Check if there's any fiat available to execute a buy
-    accounts = ccxt_client.get_accounts()
-    prices = get_prices(ccxt_client, coins, args.fiat_currency)
+    accounts = gemini_client.fetchBalance()
+    prices = get_prices(gemini_client, coins, args.fiat_currency)
     withdrawn_balances = get_withdrawn_balances(db_session)
     print('accounts={}'.format(accounts))
     print('prices={}'.format(prices))
     print('withdrawn_balances={}'.format(withdrawn_balances))
 
-    fiat_balances = get_fiat_balances(args, coins, accounts,
+    fiat_balances = get_fiat_balances(coins, accounts,
                                       withdrawn_balances, prices)
     print('fiat_balances={}'.format(fiat_balances))
 
@@ -324,13 +332,13 @@ def buy(args, coins, ccxt_client, db_session):
     if fiat_amount > args.withdrawal_amount:
         print('fiat balance above {} {}, buying more'.format(
             args.withdrawal_amount, args.fiat_currency))
-        start_buy_orders(args, coins, accounts, prices,
-                         fiat_balances, fiat_amount, ccxt_client, db_session)
+        start_buy_orders(args, coins, prices,
+                         fiat_balances, fiat_amount, gemini_client, db_session)
     else:
         print('only {} {} fiat balance remaining, withdrawing'
               ' coins without buying'.format(
-                  fiat_amount, args.fiat_currency))
-        withdraw(coins, accounts, ccxt_client, db_session)
+            fiat_amount, args.fiat_currency))
+        withdraw(coins, accounts, gemini_client, db_session)
 
 
 def main():
@@ -353,13 +361,13 @@ def main():
       }
     }
     """
-
+    print("start of main()")
     parser = argparse.ArgumentParser(description='Buy coins!',
                                      epilog='Default coins are as follows: {}'
                                      .format(default_coins),
                                      formatter_class=argparse.
                                      RawDescriptionHelpFormatter)
-    parser.add_argument('--exchange-id',help='ccxt exchange id',required=True)
+    parser.add_argument('--exchange-id', help='ccxt exchange id', required=True)
     parser.add_argument('--mode',
                         help='mode (deposit or buy)', required=True)
     parser.add_argument('--amount', type=float, help='amount to deposit')
@@ -382,20 +390,20 @@ def main():
     parser.add_argument('--fiat-currency', help='Fiat currency (default: USD)',
                         default='USD')
     parser.add_argument('--withdrawal-amount', help='withdraw when fiat '
-                        'balance drops below this amount (default: 25)',
+                                                    'balance drops below this amount (default: 25)',
                         type=float, default=25)
     parser.add_argument('--db-engine', help='SQLAlchemy DB engine '
-                        '(default: sqlite:///cbpro_history.db)',
-                        default='sqlite:///cbpro_history.db')
+                                            '(default: sqlite:///ccxt_history.db)',
+                        default='sqlite:///ccxt_history.db')
     parser.add_argument('--max-retries', help='Maximum number of times to '
-                        'retry if there are any failures, such as API issues '
-                        '(default: 3)', type=int, default=3)
+                                              'retry if there are any failures, such as API issues '
+                                              '(default: 3)', type=int, default=3)
     parser.add_argument('--coins', help='Coins to trade, minimum trade size,'
-                        ' withdrawal addresses and external balances. '
-                        'Accepts a JSON string.',
+                                        ' withdrawal addresses and external balances. '
+                                        'Accepts a JSON string.',
                         default=default_coins)
     parser.add_argument('--base-fee', help='Default base fee to subtract '
-                        'from overall balance.', type=float, default=0.0015)
+                                           'from overall balance.', type=float, default=0.0025)
 
     args = parser.parse_args()
     coins = json.loads(args.coins)
@@ -407,12 +415,13 @@ def main():
 
     exchange_class = getattr(ccxt, args.exchange_id)
 
-    ccxt_client = exchange_class({
-        'apiKey':args.key, 
-        'secret':args.b64secret,
-        'password':args.passphrase, 
-        'timeout':30000,
-        'enableRateLimit':True,
+    gemini_client = exchange_class({
+        'apiKey': args.key,
+        'secret': args.b64secret,
+        #   'password':args.passphrase,
+        'timeout': 30000,
+        'enableRateLimit': True,
+        'rateLimit': 10000
     })
 
     db_session = get_session(args.db_engine)
@@ -424,9 +433,9 @@ def main():
         print('attempt {} of {}'.format(retry, args.max_retries))
         try:
             if args.mode == 'deposit':
-                deposit(args, ccxt_client, db_session)
+                deposit(args, gemini_client, db_session)
             elif args.mode == 'buy':
-                buy(args, coins, ccxt_client, db_session)
+                buy(args, coins, gemini_client, db_session)
             sys.stdout.flush()
             sys.exit(0)
         except Exception as e:
@@ -440,5 +449,5 @@ def main():
             backoff = backoff * 2
 
 
-if __name__ == 'main':
+if __name__ == '__main__':
     main()
