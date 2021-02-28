@@ -117,7 +117,7 @@ def get_fiat_balances(coins, accounts, withdrawn_balances, prices):
 
 
 def get_account(accounts, currency):
-    for a in accounts:
+    for a in accounts['info']:
         if a['currency'] == currency:
             return a
 
@@ -158,30 +158,32 @@ def generate_buy_orders(coins, coin, args, amount_to_buy, price):
     getcontext().rounding = ROUND_DOWN
     buy_orders = []
 
-    # If the size is <= minimum * 5, set a single buy order, because otherwise
-    # it will get rejected
+    # Calcualte the number of orders, which can vary between 0 and 5
     minimum_order_size = coins[coin].get('minimum_order_size', 0.01)
-    number_of_orders = min([
-        args.order_count,
-        max([1, math.floor(
-            amount_to_buy / (minimum_order_size * price))])
-    ])
-
+    minimum_order_amount = minimum_order_size * price
+    order_count_unrounded = amount_to_buy / minimum_order_amount
+    
+    number_of_orders = min([args.order_count, math.floor(order_count_unrounded)])
+    
+    if number_of_orders == 0:
+        print('{}: amount_to_buy={} is less than min_order_amount={}, therefore placing ZERO orders'.format(
+            coin, amount_to_buy, minimum_order_amount))
+    else:
     # Set 5 buy orders
-    amount = Decimal(math.floor(
-        100 * amount_to_buy / number_of_orders)) / Decimal(100)
-    discount = 1 - args.starting_discount
+        amount = Decimal(math.floor(
+            100 * amount_to_buy / number_of_orders)) / Decimal(100)
+        discount = 1 - args.starting_discount
 
-    for _ in range(0, number_of_orders):
-        discounted_price = Decimal(math.floor(
-            100.0 * price * discount)) / Decimal(100)
-        size = round(amount / discounted_price, coins[coin]['precision']['amount'])
+        for _ in range(0, number_of_orders):
+            discounted_price = Decimal(math.floor(
+                100.0 * price * discount)) / Decimal(100)
+            size = round(amount / discounted_price, int(abs(math.log10(coins[coin]['precision']['amount']))))
 
-        buy_orders.append({
-            'price': float(discounted_price),
-            'size': float(size),
-        })
-        discount = discount - args.discount_step
+            buy_orders.append({
+                'price': float(discounted_price),
+                'size': float(size),
+            })
+            discount = discount - args.discount_step
     return buy_orders
 
 
@@ -247,21 +249,33 @@ def execute_withdrawal(gemini_client, amount, currency, crypto_address,
     # janky flooring.
     amount = '{0:.9f}'.format(float(amount))[0:-1]
     print('withdrawing {} {} to {}'.format(amount, currency, crypto_address))
-    transaction = gemini_client.crypto_withdraw(
+    transaction = gemini_client.withdraw(
+        code=currency,
         amount=amount,
-        currency=currency,
-        crypto_address=crypto_address
+        address=crypto_address,
+        tag=None,
+        params={}
     )
     print('transaction={}'.format(transaction))
-    if 'id' in transaction:
-        db_session.add(
-            Withdrawal(
-                amount=amount,
-                currency=currency,
-                crypto_address=crypto_address,
-                cbpro_withdrawal_id=transaction['id']
+    if 'info' in transaction:
+        if currency == ('ETH' or 'GUSD'):
+            db_session.add(
+                Withdrawal(
+                    amount=amount,
+                    currency=currency,
+                    crypto_address=crypto_address,
+                    ccxt_withdrawal_id=transaction['info']['txHash']
+                )
             )
-        )
+        else:
+            db_session.add(
+                Withdrawal(
+                    amount=amount,
+                    currency=currency,
+                    crypto_address=crypto_address,
+                    ccxt_withdrawal_id=transaction['info']['withdrawalId']
+                )
+            )
         db_session.commit()
 
 
@@ -274,12 +288,12 @@ def withdraw(coins, accounts, gemini_client, db_session):
                   'not withdrawing'.format(coin))
             continue
         account = get_account(accounts, coin)
-        if float(account['balance']) < 0.01:
+        if float(account['availableForWithdrawal']) < 0.01:
             print('{} balance only {}, not withdrawing'.format(
-                coin, account['balance']))
+                coin, account['availableForWithdrawal']))
         else:
             execute_withdrawal(gemini_client,
-                               account['balance'],
+                               account['availableForWithdrawal'],
                                coin,
                                coins[coin]['withdrawal_address'],
                                db_session)
@@ -384,7 +398,7 @@ def main():
                         default=0.005)
     parser.add_argument('--discount-step', type=float,
                         help='discount step between orders (default: 0.01)',
-                        default=0.01)
+                        default=0.01    )
     parser.add_argument('--order-count', type=int,
                         help='number of orders (default: 5)', default=5)
     parser.add_argument('--fiat-currency', help='Fiat currency (default: USD)',

@@ -4,6 +4,7 @@ with open('README.md') as f:
     readme = f.read()
 
 requires = [
+    'ccxt>=1.24',
     'cbpro-notbroken==1.1.5',
     'sqlalchemy>=1.2.14',
     'python-dateutil>=2.7.5',
@@ -15,7 +16,7 @@ test_requires = [
 ]
 
 setup(
-    name='optimal_buy_cbpro',
+    name='optimal_buy_ccxt',
     version='1.1.21',
     description='Buy the coins, optimally!',
     long_description=readme,
